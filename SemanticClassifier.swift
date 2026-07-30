@@ -8,12 +8,17 @@ enum Semantic: Equatable {
     case phone
     case filePath
     case shellCommand
+    case uuid
+    case hash
+    case secret
     case plain
 }
 
 // Classifies clipboard text with cheap deterministic checks — no ML, no
 // guessing. Detects CSS colors (hex, rgb(), hsl()), emails, URLs, phone
-// numbers, file paths, and popular unix commands; everything else stays plain.
+// numbers, file paths, popular unix commands, UUIDs, hex hashes, and
+// secret-looking jumbles (passwords, API keys, base64 blobs); everything
+// else stays plain.
 enum SemanticClassifier {
 
     static func classify(_ text: String) -> Semantic {
@@ -23,6 +28,9 @@ enum SemanticClassifier {
         if isURL(trimmed) { return .url }
         if isFilePath(trimmed) { return .filePath }
         if isShellCommand(trimmed) { return .shellCommand }
+        if isUUID(trimmed) { return .uuid }
+        if isHexHash(trimmed) { return .hash }
+        if isSecret(trimmed) { return .secret }
         if isPhoneNumber(trimmed) { return .phone }
         return .plain
     }
@@ -124,7 +132,7 @@ enum SemanticClassifier {
         return (r + m, g + m, b + m)
     }
 
-    // MARK: - Emails, URLs, phone numbers
+    // MARK: - Emails and URLs
 
     private static func isEmail(_ text: String) -> Bool {
         let candidate = text.hasPrefix("mailto:") ? String(text.dropFirst(7)) : text
@@ -180,6 +188,74 @@ enum SemanticClassifier {
             $0.hasPrefix("-") || $0.contains("/") || $0.hasPrefix("~")
         }
     }
+
+    // MARK: - UUIDs, hashes, secrets
+
+    private static func isUUID(_ text: String) -> Bool {
+        text.count == 36 && UUID(uuidString: text) != nil
+    }
+
+    // MD5 (32), SHA-1 (40), SHA-256 (64), SHA-512 (128) and friends: an even
+    // run of hex digits. Requiring at least one letter and one digit rules
+    // out long decimal IDs and hex-only English ("deadbeef" needs a digit).
+    private static func isHexHash(_ text: String) -> Bool {
+        guard text.count >= 32, text.count <= 128, text.count % 2 == 0,
+              text.allSatisfy(\.isHexDigit) else { return false }
+        return text.contains(where: \.isNumber) && text.contains(where: \.isLetter)
+    }
+
+    // Well-known machine-generated prefixes (API keys, tokens, "eyJ" = a JWT
+    // or other base64 JSON) that earn the key icon even when the jumble
+    // heuristic below wouldn't fire (e.g. AWS key IDs have no lowercase).
+    private static let secretPrefixes = [
+        "sk-", "sk_", "pk_", "ghp_", "gho_", "github_pat_", "glpat-", "npm_",
+        "xox", "AKIA", "ASIA", "AIza", "ya29.", "eyJ",
+    ]
+
+    private static func isSecret(_ text: String) -> Bool {
+        if text.hasPrefix("-----BEGIN ") { return true }  // PEM key/cert block
+        guard !text.contains(where: \.isWhitespace) else { return false }
+        if text.count >= 20, secretPrefixes.contains(where: text.hasPrefix) { return true }
+        return looksLikeGibberish(text)
+    }
+
+    private enum CharClass {
+        case upper, lower, digit, symbol
+
+        init?(_ ch: Character) {
+            if ch.isUppercase { self = .upper }
+            else if ch.isLowercase { self = .lower }
+            else if ch.isNumber { self = .digit }
+            else if "-_+/=.:~!@#$%^&*?".contains(ch) { self = .symbol }
+            else { return nil }
+        }
+    }
+
+    // Passwords, API keys, and base64 blobs read as a jumble: upper case,
+    // lower case, and digits interleaved every couple of characters. Prose
+    // and camelCase identifiers switch character class far less often, so a
+    // high transition rate separates the two without a dictionary
+    // ("aB3xK9mQ2rTz" ≈ 1.0, "iPhone15ProMax256GB" = 0.5, stays plain).
+    private static func looksLikeGibberish(_ text: String) -> Bool {
+        guard text.count >= 12, text.count <= 512 else { return false }
+        var upper = 0, lower = 0, digits = 0, transitions = 0
+        var previous: CharClass?
+        for ch in text {
+            guard let current = CharClass(ch) else { return false }
+            switch current {
+            case .upper: upper += 1
+            case .lower: lower += 1
+            case .digit: digits += 1
+            case .symbol: break
+            }
+            if let previous, previous != current { transitions += 1 }
+            previous = current
+        }
+        guard upper > 0, lower > 0, digits >= 2 else { return false }
+        return Double(transitions) / Double(text.count - 1) >= 0.6
+    }
+
+    // MARK: - Phone numbers
 
     private static let phoneDetector = try? NSDataDetector(
         types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue)

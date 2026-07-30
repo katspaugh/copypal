@@ -112,6 +112,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .shellCommand:
             item.image = Self.symbol("terminal", "Shell command")
             item.attributedTitle = Self.monospacedTitle(item.title)
+        case .uuid:
+            item.image = Self.symbol("tag", "UUID")
+            item.attributedTitle = Self.monospacedTitle(item.title)
+        case .hash:
+            item.image = Self.symbol("number", "Hash")
+            item.attributedTitle = Self.monospacedTitle(item.title)
+        case .secret:
+            item.image = Self.symbol("key", "Secret")
+            item.attributedTitle = Self.monospacedTitle(item.title)
         case .plain:
             break
         }
