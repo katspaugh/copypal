@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.target = self
                 item.representedObject = entry
                 item.toolTip = String(entry.prefix(1000))
+                decorate(item, as: SemanticClassifier.classify(entry))
                 menu.addItem(item)
             }
         }
@@ -92,6 +93,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    // MARK: - Semantic formatting
+
+    private func decorate(_ item: NSMenuItem, as kind: Semantic) {
+        switch kind {
+        case .color(let color):
+            item.image = Self.swatch(for: color)
+            item.attributedTitle = Self.monospacedTitle(item.title)
+        case .email:
+            item.image = Self.symbol("envelope", "Email address")
+        case .url:
+            item.image = Self.symbol("link", "Link")
+        case .phone:
+            item.image = Self.symbol("phone", "Phone number")
+        case .filePath:
+            item.image = Self.symbol("folder", "File path")
+            item.attributedTitle = Self.monospacedTitle(item.title)
+        case .shellCommand:
+            item.image = Self.symbol("terminal", "Shell command")
+            item.attributedTitle = Self.monospacedTitle(item.title)
+        case .plain:
+            break
+        }
+    }
+
+    private static func symbol(_ name: String, _ description: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: description)
+    }
+
+    private static func monospacedTitle(_ title: String) -> NSAttributedString {
+        NSAttributedString(string: title, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+        ])
+    }
+
+    private static func swatch(for color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3)
+            color.setFill()
+            path.fill()
+            NSColor.tertiaryLabelColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return true
+        }
+    }
+
     private static func menuTitle(for entry: String) -> String {
         let oneLine = entry
             .components(separatedBy: .whitespacesAndNewlines)
@@ -99,6 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .joined(separator: " ")
         return oneLine.count > 50 ? String(oneLine.prefix(50)) + "…" : oneLine
     }
+
+    // MARK: - Actions & persistence
 
     @objc private func copyEntry(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
@@ -115,9 +164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadHistory() {
-        guard let data = try? Data(contentsOf: historyURL),
-              let saved = try? JSONDecoder().decode([String].self, from: data) else { return }
-        history = Array(saved.prefix(maxEntries))
+        guard let data = try? Data(contentsOf: historyURL) else { return }
+        if let saved = try? JSONDecoder().decode([String].self, from: data) {
+            history = Array(saved.prefix(maxEntries))
+        } else if let structured = try? JSONDecoder().decode([[String: String?]].self, from: data) {
+            // Briefly-used format that stored {text, appName, sourceURL} objects.
+            history = structured.compactMap { $0["text"] ?? nil }.prefix(maxEntries).map { $0 }
+        }
     }
 
     private func saveHistory() {

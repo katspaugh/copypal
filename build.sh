@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-swiftc -O main.swift -o CopyPal
+swiftc -O main.swift SemanticClassifier.swift -o CopyPal
 
 APP=CopyPal.app
 rm -rf "$APP"
@@ -24,7 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>LSUIElement</key>

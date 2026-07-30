@@ -1,0 +1,198 @@
+import Cocoa
+
+// What a clipboard entry semantically is, so the menu can format it.
+enum Semantic: Equatable {
+    case color(NSColor)
+    case email
+    case url
+    case phone
+    case filePath
+    case shellCommand
+    case plain
+}
+
+// Classifies clipboard text with cheap deterministic checks — no ML, no
+// guessing. Detects CSS colors (hex, rgb(), hsl()), emails, URLs, phone
+// numbers, file paths, and popular unix commands; everything else stays plain.
+enum SemanticClassifier {
+
+    static func classify(_ text: String) -> Semantic {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let color = parseCSSColor(trimmed) { return .color(color) }
+        if isEmail(trimmed) { return .email }
+        if isURL(trimmed) { return .url }
+        if isFilePath(trimmed) { return .filePath }
+        if isShellCommand(trimmed) { return .shellCommand }
+        if isPhoneNumber(trimmed) { return .phone }
+        return .plain
+    }
+
+    // MARK: - CSS colors
+
+    static func parseCSSColor(_ text: String) -> NSColor? {
+        parseHexColor(text) ?? parseFunctionalColor(text)
+    }
+
+    private static func parseHexColor(_ text: String) -> NSColor? {
+        var hex = text.lowercased()
+        if hex.hasPrefix("#") {
+            hex.removeFirst()
+        } else if hex.hasPrefix("0x") {
+            hex.removeFirst(2)
+        } else {
+            return nil
+        }
+        guard [3, 4, 6, 8].contains(hex.count), hex.allSatisfy(\.isHexDigit) else { return nil }
+        if hex.count <= 4 {
+            hex = hex.map { "\($0)\($0)" }.joined()
+        }
+        var value: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&value)
+        let r, g, b, a: CGFloat
+        if hex.count == 8 {  // CSS #RRGGBBAA
+            r = CGFloat((value >> 24) & 0xff) / 255
+            g = CGFloat((value >> 16) & 0xff) / 255
+            b = CGFloat((value >> 8) & 0xff) / 255
+            a = CGFloat(value & 0xff) / 255
+        } else {
+            r = CGFloat((value >> 16) & 0xff) / 255
+            g = CGFloat((value >> 8) & 0xff) / 255
+            b = CGFloat(value & 0xff) / 255
+            a = 1
+        }
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
+    }
+
+    // rgb(255, 87, 51) / rgba(255, 87, 51, 0.5) / rgb(255 87 51 / 50%)
+    // hsl(14, 100%, 60%) / hsla(14deg 100% 60% / 0.5)
+    private static func parseFunctionalColor(_ text: String) -> NSColor? {
+        let lower = text.lowercased()
+        guard lower.hasSuffix(")"), let open = lower.firstIndex(of: "(") else { return nil }
+        let name = String(lower[..<open])
+        guard ["rgb", "rgba", "hsl", "hsla"].contains(name) else { return nil }
+
+        let inner = lower[lower.index(after: open)..<lower.index(before: lower.endIndex)]
+        let parts = inner.split { ", /".contains($0) }.map(String.init)
+        guard parts.count == 3 || parts.count == 4 else { return nil }
+
+        // "50%" → 0.5, "128" → 128 (caller scales), "14deg" → 14
+        func number(_ raw: String) -> CGFloat? {
+            if raw.hasSuffix("%") { return Double(raw.dropLast()).map { CGFloat($0) / 100 } }
+            let bare = raw.hasSuffix("deg") ? String(raw.dropLast(3)) : raw
+            return Double(bare).map { CGFloat($0) }
+        }
+
+        var alpha: CGFloat = 1
+        if parts.count == 4 {
+            guard let a = number(parts[3]) else { return nil }
+            alpha = min(max(a, 0), 1)
+        }
+
+        if name.hasPrefix("rgb") {
+            var rgb: [CGFloat] = []
+            for part in parts.prefix(3) {
+                guard let value = number(part) else { return nil }
+                rgb.append(part.hasSuffix("%") ? value : value / 255)
+            }
+            return NSColor(srgbRed: min(max(rgb[0], 0), 1),
+                           green: min(max(rgb[1], 0), 1),
+                           blue: min(max(rgb[2], 0), 1),
+                           alpha: alpha)
+        }
+
+        guard let h = number(parts[0]), let s = number(parts[1]), let l = number(parts[2]),
+              parts[1].hasSuffix("%"), parts[2].hasSuffix("%") else { return nil }
+        let (r, g, b) = hslToRGB(h: h, s: min(max(s, 0), 1), l: min(max(l, 0), 1))
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+    }
+
+    private static func hslToRGB(h: CGFloat, s: CGFloat, l: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
+        let hue = (h.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        let c = (1 - abs(2 * l - 1)) * s
+        let hp = hue / 60
+        let x = c * (1 - abs(hp.truncatingRemainder(dividingBy: 2) - 1))
+        let m = l - c / 2
+        let (r, g, b): (CGFloat, CGFloat, CGFloat)
+        switch hp {
+        case ..<1: (r, g, b) = (c, x, 0)
+        case ..<2: (r, g, b) = (x, c, 0)
+        case ..<3: (r, g, b) = (0, c, x)
+        case ..<4: (r, g, b) = (0, x, c)
+        case ..<5: (r, g, b) = (x, 0, c)
+        default: (r, g, b) = (c, 0, x)
+        }
+        return (r + m, g + m, b + m)
+    }
+
+    // MARK: - Emails, URLs, phone numbers
+
+    private static func isEmail(_ text: String) -> Bool {
+        let candidate = text.hasPrefix("mailto:") ? String(text.dropFirst(7)) : text
+        guard !candidate.contains(where: \.isWhitespace),
+              !candidate.contains(":"), !candidate.contains("/") else { return false }
+        return candidate.range(of: "^[^@\\s]+@[^@\\s]+\\.[^@\\s.]{2,}$",
+                               options: .regularExpression) != nil
+    }
+
+    private static func isURL(_ text: String) -> Bool {
+        // Anything that starts with a URL counts, even with more words after
+        // it — that also covers URLs hard-wrapped by terminals.
+        let first = text.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? text
+        return isURLToken(first)
+    }
+
+    private static func isURLToken(_ text: String) -> Bool {
+        if text.hasPrefix("http://") || text.hasPrefix("https://") || text.hasPrefix("ftp://") {
+            return true
+        }
+        return text.hasPrefix("www.") && text.dropFirst(4).contains(".")
+    }
+
+    private static func isFilePath(_ text: String) -> Bool {
+        guard !text.contains("\n") else { return false }
+        guard text.hasPrefix("/") || text.hasPrefix("~/") else { return false }
+        if !text.contains(where: \.isWhitespace) { return true }
+        // Paths with spaces are only believed if they actually exist on disk.
+        return FileManager.default.fileExists(atPath: NSString(string: text).expandingTildeInPath)
+    }
+
+    // Commands that are rarely English words classify on sight; ambiguous
+    // ones ("find", "open", …) also need a flag or path-like argument.
+    private static let strongCommands: Set<String> = [
+        "git", "brew", "sudo", "curl", "wget", "ssh", "scp", "rsync", "docker",
+        "kubectl", "npm", "npx", "yarn", "pnpm", "pip", "pip3", "cargo", "swiftc",
+        "xcodebuild", "xcrun", "chmod", "chown", "mkdir", "grep", "sed", "awk",
+        "systemctl", "apt", "apt-get", "dnf", "tmux", "ffmpeg", "cd", "ls",
+    ]
+    private static let weakCommands: Set<String> = [
+        "cat", "find", "make", "go", "node", "python", "python3", "ruby", "swift",
+        "open", "echo", "export", "kill", "rm", "cp", "mv", "tar", "head", "tail",
+        "top", "ps", "man", "touch", "date", "which", "env", "diff", "sort",
+    ]
+
+    private static func isShellCommand(_ text: String) -> Bool {
+        guard !text.contains("\n") else { return false }
+        let tokens = text.split(separator: " ")
+        guard let first = tokens.first.map(String.init) else { return false }
+        if strongCommands.contains(first) { return true }
+        guard tokens.count > 1, weakCommands.contains(first) else { return false }
+        return tokens.dropFirst().contains {
+            $0.hasPrefix("-") || $0.contains("/") || $0.hasPrefix("~")
+        }
+    }
+
+    private static let phoneDetector = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue)
+
+    private static func isPhoneNumber(_ text: String) -> Bool {
+        // Only treat the entry as a phone number if the whole string is one
+        // (with enough digits to rule out dates and short codes).
+        guard text.count <= 30, text.filter(\.isNumber).count >= 7,
+              let detector = phoneDetector else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = detector.firstMatch(in: text, options: [], range: range) else {
+            return false
+        }
+        return match.range == range
+    }
+}
