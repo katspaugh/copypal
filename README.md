@@ -1,5 +1,7 @@
 # CopyPal 📋
 
+<img width="523" height="346" alt="Screenshot 2026-08-23 at 8 21 15 AM" src="https://github.com/user-attachments/assets/0768ba98-e203-49d3-b552-245cc66937c9" />
+
 A quick-and-dirty clipboard history menu bar app for macOS. Keeps your last
 10 copied text snippets one click away — a DIY take on CopyClip.
 
