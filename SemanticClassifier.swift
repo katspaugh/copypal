@@ -189,7 +189,13 @@ enum SemanticClassifier {
 
     private static func isShellCommand(_ text: String) -> Bool {
         guard !text.contains("\n") else { return false }
-        let tokens = text.split(separator: " ")
+        // Allow a leading "!" — the shell-escape prefix used by Claude Code,
+        // Jupyter, vim and friends ("!git status").
+        var body = Substring(text)
+        if body.hasPrefix("!") {
+            body = body.dropFirst().drop(while: \.isWhitespace)
+        }
+        let tokens = body.split(separator: " ")
         guard let first = tokens.first.map(String.init) else { return false }
         if strongCommands.contains(first) { return true }
         guard tokens.count > 1, weakCommands.contains(first) else { return false }
