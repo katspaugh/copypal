@@ -180,6 +180,7 @@ enum SemanticClassifier {
         "kubectl", "npm", "npx", "yarn", "pnpm", "pip", "pip3", "cargo", "swiftc",
         "xcodebuild", "xcrun", "chmod", "chown", "mkdir", "grep", "sed", "awk",
         "systemctl", "apt", "apt-get", "dnf", "tmux", "ffmpeg", "cd", "ls",
+        "sh", "bash", "zsh",
     ]
     private static let weakCommands: Set<String> = [
         "cat", "find", "make", "go", "node", "python", "python3", "ruby", "swift",
