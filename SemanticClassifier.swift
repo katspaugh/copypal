@@ -43,7 +43,8 @@ enum SemanticClassifier {
 
     private static func parseHexColor(_ text: String) -> NSColor? {
         var hex = text.lowercased()
-        if hex.hasPrefix("#") {
+        let hashPrefixed = hex.hasPrefix("#")
+        if hashPrefixed {
             hex.removeFirst()
         } else if hex.hasPrefix("0x") {
             hex.removeFirst(2)
@@ -51,6 +52,14 @@ enum SemanticClassifier {
             return nil
         }
         guard [3, 4, 6, 8].contains(hex.count), hex.allSatisfy(\.isHexDigit) else { return nil }
+        // "#1966" is far more likely a PR/issue number than an #RGBA color, so
+        // the 3/4-digit shorthand must contain a hex letter or a leading zero
+        // (issue numbers are all-decimal with no leading zeros). Six- and
+        // eight-digit forms like #000000 are kept as-is.
+        if hashPrefixed, hex.count <= 4,
+           !hex.hasPrefix("0"), !hex.contains(where: \.isLetter) {
+            return nil
+        }
         if hex.count <= 4 {
             hex = hex.map { "\($0)\($0)" }.joined()
         }
